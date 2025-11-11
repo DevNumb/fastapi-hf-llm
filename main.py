@@ -14,8 +14,7 @@ HF_TOKEN = os.environ.get("HF_TOKEN")
 MODEL_NAME = os.environ.get("MODEL_NAME", "mistralai/Mistral-7B-Instruct-v0.1")
 API_URL = "https://router.huggingface.co/v1/chat/completions"
 
-if not HF_TOKEN:
-    print("⚠️ Warning: HF_TOKEN not set — API calls will fail.")
+
 
 HEADERS = {
     "Authorization": f"Bearer {HF_TOKEN}",
@@ -150,3 +149,4 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", "8000"))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
