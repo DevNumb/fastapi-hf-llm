@@ -4,76 +4,83 @@ import gradio as gr
 import requests
 import os
 import threading
-import requests
-
-app = FastAPI()
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# --- Load environment variables ---
 load_dotenv()
+HF_TOKEN = os.getenv("HF_TOKEN")
 
-
+# --- Hugging Face API config ---
 API_URL = "https://router.huggingface.co/v1/chat/completions"
-headers = {
-    "Authorization": f"Bearer {os.environ['HF_TOKEN']}",
-}
+headers = {"Authorization": f"Bearer {HF_TOKEN}"}
 
-# --- FastAPI endpoint (for API use) ---
+# --- FastAPI app ---
+app = FastAPI()
+
 @app.get("/")
 def home():
-    return {"message": "Welcome to my FastAPI + Gradio LLM app!"}
+    return {"message": "Welcome to FastAPI + Gradio + Hugging Face (DeepSeek-R1)!"}
 
-@app.post("/generate")
-def generate_text(prompt: str):
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    payload = {"inputs": prompt}
-
+# --- Function to query the Hugging Face chat API ---
+def query_huggingface(message: str):
+    payload = {
+        "model": "deepseek-ai/DeepSeek-R1:novita",
+        "messages": [
+            {"role": "user", "content": message}
+        ]
+    }
     response = requests.post(API_URL, headers=headers, json=payload)
     if response.status_code != 200:
         raise HTTPException(status_code=response.status_code, detail=response.text)
-    result = response.json()
-    return {"prompt": prompt, "generated_text": result[0]["generated_text"]}
+
+    data = response.json()
+    try:
+        return data["choices"][0]["message"]["content"]
+    except KeyError:
+        return f"Unexpected response format: {data}"
+
+# --- FastAPI endpoint ---
+@app.post("/generate")
+def generate_text(prompt: str):
+    result = query_huggingface(prompt)
+    return {"prompt": prompt, "response": result}
 
 # --- Gradio frontend function ---
 def gradio_generate(prompt):
-    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
-    payload = {"inputs": prompt}
-    response = requests.post(API_URL, headers=headers, json=payload)
-    if response.status_code != 200:
-        return f"Error: {response.text}"
-    result = response.json()
-    return result[0]["generated_text"]
+    try:
+        return query_huggingface(prompt)
+    except Exception as e:
+        return f"Error: {e}"
 
-# --- Launch Gradio Interface in background thread ---
+# --- Launch Gradio in background thread ---
 def start_gradio():
     demo = gr.Interface(
         fn=gradio_generate,
         inputs="text",
         outputs="text",
-        title="FastAPI + Hugging Face LLM",
-        description="Type a prompt below and let the AI complete it!"
+        title="🧠 FastAPI + DeepSeek-R1 (via Hugging Face)",
+        description="Ask anything and get an AI response powered by DeepSeek-R1:novita!"
     )
     demo.launch(server_name="0.0.0.0", server_port=7860, share=False)
 
-threading.Thread(target=start_gradio).start()
+threading.Thread(target=start_gradio, daemon=True).start()
 
-# --- Serve Gradio via HTML page ---
+# --- Serve Gradio via HTML iframe ---
 @app.get("/ui", response_class=HTMLResponse)
 def gradio_ui():
     return """
     <html>
-        <head><title>LLM Web UI</title></head>
-        <body style="text-align:center; font-family:sans-serif">
-            <h2>🤖 FastAPI + Gradio LLM Interface</h2>
+        <head><title>DeepSeek-R1 LLM Interface</title></head>
+        <body style="text-align:center; font-family:sans-serif;">
+            <h2>🤖 FastAPI + DeepSeek-R1 (Hugging Face Router)</h2>
             <iframe src="http://localhost:7860" width="100%" height="700" frameborder="0"></iframe>
-            <p>If you're online (Render), replace 'localhost' with your Render hostname in this iframe URL.</p>
+            <p>⚙️ If you're deploying to Render or similar, replace 'localhost' with your public Render hostname.</p>
         </body>
     </html>
-
     """
-
 
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
