@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>StudyBuddy AI - Your Free AI Assistant</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .message-fade-in {
+            animation: fadeIn 0.5s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .typing-dots {
+            display: inline-block;
+        }
+        .typing-dots span {
+            animation: typing 1.4s infinite;
+        }
+        .typing-dots span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+        .typing-dots span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+        @keyframes typing {
+            0%, 60%, 100% { opacity: 0.3; }
+            30% { opacity: 1; }
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8 max-w-4xl">
+        <!-- Header -->
+        <div class="text-center mb-8 message-fade-in">
+            <div class="flex items-center justify-center mb-4">
+                <div class="w-12 h-12 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center mr-4">
+                    <i class="fas fa-brain text-white text-xl"></i>
+                </div>
+                <h1 class="text-4xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+                    StudyBuddy AI
+                </h1>
+            </div>
+            <p class="text-gray-600 text-lg mb-2">Your free AI assistant powered by Hugging Face models</p>
+            <div class="inline-flex items-center bg-blue-100 text-blue-800 px-4 py-2 rounded-full text-sm">
+                <i class="fas fa-shield-alt mr-2"></i>
+                <span>No login required • Completely free</span>
+            </div>
+        </div>
+
+        <!-- Chat Container -->
+        <div class="bg-white rounded-2xl shadow-xl overflow-hidden mb-6">
+            <!-- Chat Header -->
+            <div class="bg-gradient-to-r from-blue-500 to-purple-600 px-6 py-4 text-white">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center">
+                        <i class="fas fa-robot text-2xl mr-3"></i>
+                        <div>
+                            <h2 class="text-xl font-semibold">AI Assistant</h2>
+                            <p class="text-blue-100 text-sm">Ready to help with your questions</p>
+                        </div>
+                    </div>
+                    <div class="text-right">
+                        <div id="status" class="text-green-200 text-sm">
+                            <i class="fas fa-circle text-xs mr-1"></i>Online
+                        </div>
+                        <div class="text-blue-100 text-xs">Model: {{ model }}</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat Messages -->
+            <div id="chat-messages" class="h-96 overflow-y-auto p-6 space-y-4 bg-gray-50">
+                <!-- Welcome Message -->
+                <div class="flex justify-start">
+                    <div class="flex items-start space-x-3 max-w-[85%]">
+                        <div class="w-8 h-8 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center flex-shrink-0">
+                            <i class="fas fa-robot text-white text-sm"></i>
+                        </div>
+                        <div class="bg-white border border-gray-200 rounded-2xl rounded-tl-none px-4 py-3 shadow-sm">
+                            <p class="text-gray-800">Hello! I'm your StudyBuddy AI assistant. I can help you with explanations, answer questions, brainstorm ideas, and much more. What would you like to know today?</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input Area -->
+            <div class="border-t border-gray-200 p-6 bg-white">
+                <form id="chat-form" class="space-y-4">
+                    <div class="flex space-x-4">
+                        <div class="flex-1">
+                            <textarea 
+                                id="prompt-input" 
+                                placeholder="Ask me anything... (e.g., 'Explain quantum physics in simple terms' or 'Help me brainstorm project ideas')" 
+                                rows="3"
+                                class="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent resize-none transition-all duration-200"
+                                required
+                            ></textarea>
+                        </div>
+                        <button 
+                            type="submit" 
+                            id="submit-btn"
+                            class="self-end bg-gradient-to-r from-blue-500 to-purple-600 text-white px-6 py-3 rounded-xl font-semibold hover:from-blue-600 hover:to-purple-700 focus:ring-2 focus:ring-blue-300 focus:ring-offset-2 transition-all duration-200 transform hover:scale-105 active:scale-95 flex items-center space-x-2"
+                        >
+                            <i class="fas fa-paper-plane"></i>
+                            <span>Send</span>
+                        </button>
+                    </div>
+                    
+                    <!-- Features -->
+                    <div class="flex flex-wrap gap-2 justify-center text-xs text-gray-600">
+                        <div class="flex items-center space-x-1 bg-gray-100 px-3 py-1 rounded-full">
+                            <i class="fas fa-lightbulb text-yellow-500"></i>
+                            <span>Brainstorming</span>
+                        </div>
+                        <div class="flex items-center space-x-1 bg-gray-100 px-3 py-1 rounded-full">
+                            <i class="fas fa-book text-green-500"></i>
+                            <span>Explanations</span>
+                        </div>
+                        <div class="flex items-center space-x-1 bg-gray-100 px-3 py-1 rounded-full">
+                            <i class="fas fa-code text-blue-500"></i>
+                            <span>Coding Help</span>
+                        </div>
+                        <div class="flex items-center space-x-1 bg-gray-100 px-3 py-1 rounded-full">
+                            <i class="fas fa-question-circle text-purple-500"></i>
+                            <span>Q&A</span>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Features Grid -->
+        <div class="grid md:grid-cols-3 gap-6 mb-8">
+            <div class="bg-white rounded-xl p-6 shadow-lg border border-gray-100 text-center">
+                <div class="w-12 h-12 bg-blue-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <i class="fas fa-bolt text-blue-600 text-xl"></i>
+                </div>
+                <h3 class="font-semibold text-gray-800 mb-2">Fast Responses</h3>
+                <p class="text-gray-600 text-sm">Get instant answers with our optimized AI models</p>
+            </div>
+            <div class="bg-white rounded-xl p-6 shadow-lg border border-gray-100 text-center">
+                <div class="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <i class="fas fa-lock text-green-600 text-xl"></i>
+                </div>
+                <h3 class="font-semibold text-gray-800 mb-2">Privacy First</h3>
+                <p class="text-gray-600 text-sm">No account needed, your conversations are private</p>
+            </div>
+            <div class="bg-white rounded-xl p-6 shadow-lg border border-gray-100 text-center">
+                <div class="w-12 h-12 bg-purple-100 rounded-full flex items-center justify-center mx-auto mb-4">
+                    <i class="fas fa-graduation-cap text-purple-600 text-xl"></i>
+                </div>
+                <h3 class="font-semibold text-gray-800 mb-2">Learning Focused</h3>
+                <p class="text-gray-600 text-sm">Designed to help students and lifelong learners</p>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="text-center text-gray-500 text-sm">
+            <p>Powered by Hugging Face • Built with FastAPI • StudyBuddy AI © 2024</p>
+        </div>
+    </div>
+
+    <script>
+        let sessionId = 'session-' + Date.now();
+        const chatMessages = document.getElementById('chat-messages');
+        const chatForm = document.getElementById('chat-form');
+        const promptInput = document.getElementById('prompt-input');
+        const submitBtn = document.getElementById('submit-btn');
+
+        // Auto-resize textarea
+        promptInput.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = (this.scrollHeight) + 'px';
+        });
+
+        // Add message to chat
+        function addMessage(content, isUser = false) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `flex ${isUser ? 'justify-end' : 'justify-start'} message-fade-in`;
+            
+            const messageHTML = `
+                <div class="flex items-start space-x-3 max-w-[85%] ${isUser ? 'flex-row-reverse space-x-reverse' : ''}">
+                    <div class="w-8 h-8 ${isUser ? 'bg-gray-400' : 'bg-gradient-to-r from-blue-500 to-purple-600'} rounded-full flex items-center justify-center flex-shrink-0">
+                        <i class="fas ${isUser ? 'fa-user' : 'fa-robot'} text-white text-sm"></i>
+                    </div>
+                    <div class="${isUser ? 'bg-blue-500 text-white rounded-2xl rounded-tr-none' : 'bg-white border border-gray-200 rounded-2xl rounded-tl-none'} px-4 py-3 shadow-sm">
+                        <p>${content}</p>
+                    </div>
+                </div>
+            `;
+            
+            messageDiv.innerHTML = messageHTML;
+            chatMessages.appendChild(messageDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // Show typing indicator
+        function showTyping() {
+            const typingDiv = document.createElement('div');
+            typingDiv.className = 'flex justify-start message-fade-in';
+            typingDiv.id = 'typing-indicator';
+            
+            const typingHTML = `
+                <div class="flex items-start space-x-3 max-w-[85%]">
+                    <div class="w-8 h-8 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center flex-shrink-0">
+                        <i class="fas fa-robot text-white text-sm"></i>
+                    </div>
+                    <div class="bg-white border border-gray-200 rounded-2xl rounded-tl-none px-4 py-3 shadow-sm">
+                        <div class="typing-dots">
+                            <span>●</span><span>●</span><span>●</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            typingDiv.innerHTML = typingHTML;
+            chatMessages.appendChild(typingDiv);
+            chatMessages.scrollTop = chatMessages.scrollHeight;
+        }
+
+        // Hide typing indicator
+        function hideTyping() {
+            const typingIndicator = document.getElementById('typing-indicator');
+            if (typingIndicator) {
+                typingIndicator.remove();
+            }
+        }
+
+        // Handle form submission
+        chatForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const prompt = promptInput.value.trim();
+            if (!prompt) return;
+            
+            // Add user message
+            addMessage(prompt, true);
+            
+            // Clear input and reset height
+            promptInput.value = '';
+            promptInput.style.height = 'auto';
+            
+            // Disable form
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i><span>Thinking...</span>';
+            
+            // Show typing indicator
+            showTyping();
+            
+            try {
+                const response = await fetch('/api/generate', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        prompt: prompt,
+                        session_id: sessionId
+                    })
+                });
+                
+                const data = await response.json();
+                
+                // Hide typing indicator
+                hideTyping();
+                
+                if (response.ok) {
+                    // Add AI response
+                    addMessage(data.response);
+                    
+                    // Show cache status
+                    if (data.cached) {
+                        const cacheNotice = document.createElement('div');
+                        cacheNotice.className = 'text-center';
+                        cacheNotice.innerHTML = '<div class="inline-flex items-center bg-green-100 text-green-800 text-xs px-3 py-1 rounded-full"><i class="fas fa-bolt mr-1"></i> Fast cached response</div>';
+                        chatMessages.appendChild(cacheNotice);
+                    }
+                } else {
+                    addMessage(`Error: ${data.detail || 'Something went wrong'}`);
+                }
+            } catch (error) {
+                hideTyping();
+                addMessage('Error: Failed to connect to the server. Please try again.');
+                console.error('Error:', error);
+            } finally {
+                // Re-enable form
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<i class="fas fa-paper-plane"></i><span>Send</span>';
+            }
+        });
+
+        // Focus on input when page loads
+        promptInput.focus();
+    </script>
+</body>
+</html>
