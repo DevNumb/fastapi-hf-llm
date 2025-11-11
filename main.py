@@ -1,27 +1,29 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
-import gradio as gr
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, HTMLResponse
 import requests
+import gradio as gr
 import os
-import threading
-import os
+import time
+from typing import Optional
+
+# === Environment setup ===
 HF_TOKEN = os.environ.get("HF_TOKEN")
+MODEL_NAME = os.environ.get("MODEL_NAME", "mistralai/Mistral-7B-Instruct-v0.1")
 API_URL = "https://router.huggingface.co/v1/chat/completions"
-PORT = int(os.getenv("PORT", "7860"))  # gradio port (unused in Render; example only)
 
 if not HF_TOKEN:
-    print("Warning: HF_TOKEN is not set. App will fail trying to use HF API unless set in env.")
+    print("⚠️ Warning: HF_TOKEN not set — API calls will fail.")
 
 HEADERS = {
     "Authorization": f"Bearer {HF_TOKEN}",
     "Content-Type": "application/json",
 }
 
-# --- Simple in-memory TTL cache to reduce duplicate calls ---
+# === Simple cache ===
 class TTLCache:
-    def __init__(self, ttl_seconds=60 * 60):
+    def __init__(self, ttl_seconds=600):
         self.ttl = ttl_seconds
-        self.store = {}  # prompt -> (timestamp, response)
+        self.store = {}
 
     def get(self, key):
         v = self.store.get(key)
@@ -33,119 +35,97 @@ class TTLCache:
             return None
         return val
 
-    def set(self, key, value):
-        self.store[key] = (time.time(), value)
+    def set(self, key, val):
+        self.store[key] = (time.time(), val)
 
-cache = TTLCache(ttl_seconds=60 * 10)  # cache identical prompts for 10 minutes
+cache = TTLCache()
 
-# --- Simple per-IP rate limiter ---
+# === Rate limiter ===
 class RateLimiter:
-    def __init__(self, max_requests=30, window_seconds=60):
+    def __init__(self, max_requests=20, window_seconds=60):
         self.max_requests = max_requests
         self.window = window_seconds
-        self.clients = {}  # ip -> [timestamps]
+        self.clients = {}
 
     def allow(self, ip):
         now = time.time()
-        arr = self.clients.get(ip, [])
-        # drop old
-        arr = [t for t in arr if now - t < self.window]
-        if len(arr) >= self.max_requests:
-            self.clients[ip] = arr
+        timestamps = [t for t in self.clients.get(ip, []) if now - t < self.window]
+        if len(timestamps) >= self.max_requests:
+            self.clients[ip] = timestamps
             return False
-        arr.append(now)
-        self.clients[ip] = arr
+        timestamps.append(now)
+        self.clients[ip] = timestamps
         return True
 
-rate_limiter = RateLimiter(max_requests=int(os.getenv("RATE_MAX", "20")), window_seconds=int(os.getenv("RATE_WINDOW", "60")))
+rate_limiter = RateLimiter()
 
-# --- Query HF chat completions router ---
-def query_hf_chat(prompt: str, model: Optional[str] = None, timeout: int = 30):
+# === Hugging Face query ===
+def query_hf(prompt: str, model: Optional[str] = None):
     model = model or MODEL_NAME
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        # optionally add more params like temperature, max_new_tokens, etc.
-        # "temperature": 0.2,
-        # "max_new_tokens": 512,
-    }
-    r = requests.post(API_URL, headers=HEADERS, json=payload, timeout=timeout)
+    payload = {"model": model, "messages": [{"role": "user", "content": prompt}]}
+    r = requests.post(API_URL, headers=HEADERS, json=payload, timeout=30)
     if r.status_code != 200:
-        # bubble up helpful error for logs; return structured error for UI
-        raise Exception(f"Hugging Face API error {r.status_code}: {r.text}")
+        raise Exception(f"HF error {r.status_code}: {r.text}")
     data = r.json()
-    # expected structure: data["choices"][0]["message"]["content"]
-    try:
-        return data["choices"][0]["message"]["content"]
-    except Exception:
-        return f"Unexpected HF response: {data}"
+    return data["choices"][0]["message"]["content"]
 
-# --- FastAPI app ---
+# === FastAPI ===
 app = FastAPI()
 
 @app.get("/")
-def root():
-    return {"ok": True, "note": "StudyBuddy running. Use /generate POST or /ui for Gradio."}
+def home():
+    return {"status": "ok", "note": "Go to /ui for the AI chat interface."}
 
 @app.post("/generate")
 async def generate(request: Request):
-    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
-    prompt = body.get("prompt") or body.get("text") or ""
+    body = await request.json()
+    prompt = body.get("prompt")
     if not prompt:
-        raise HTTPException(status_code=400, detail="Missing 'prompt' in JSON body.")
-    # rate limit by client IP
-    client_ip = request.client.host if request.client else "unknown"
-    if not rate_limiter.allow(client_ip):
-        raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
+        raise HTTPException(status_code=400, detail="Missing 'prompt'.")
 
-    # caching
-    cache_key = f"{MODEL_NAME}::" + prompt.strip()
+    ip = request.client.host
+    if not rate_limiter.allow(ip):
+        raise HTTPException(status_code=429, detail="Rate limit exceeded.")
+
+    cache_key = f"{MODEL_NAME}::{prompt.strip()}"
     cached = cache.get(cache_key)
     if cached:
-        return JSONResponse({"cached": True, "response": cached})
+        return {"cached": True, "response": cached}
 
-    # call HF
     try:
-        resp = query_hf_chat(prompt, MODEL_NAME)
+        response = query_hf(prompt)
     except Exception as e:
-        # return helpful error but avoid leaking token
-        return JSONResponse({"error": str(e)}, status_code=500)
+        raise HTTPException(status_code=500, detail=str(e))
 
-    cache.set(cache_key, resp)
-    return {"cached": False, "response": resp}
+    cache.set(cache_key, response)
+    return {"cached": False, "response": response}
 
-# --- Gradio frontend ---
-def gr_submit(prompt):
-    # simple local call to FastAPI generate endpoint (works both locally and deployed)
+# === Gradio UI ===
+def gradio_interface(prompt):
     try:
-        r = requests.post(f"http://127.0.0.1:{PORT}/generate", json={"prompt": prompt}, timeout=20)
+        r = requests.post("http://127.0.0.1:8000/generate", json={"prompt": prompt})
         if r.status_code == 200:
-            j = r.json()
-            return j.get("response") or j
+            return r.json()["response"]
         else:
             return f"Error {r.status_code}: {r.text}"
     except Exception as e:
-        # fallback: call API directly (useful if Gradio runs outside FastAPI in same process)
-        try:
-            return query_hf_chat(prompt, MODEL_NAME)
-        except Exception as e2:
-            return f"Both local and HF calls failed: {e} / {e2}"
+        return f"Request failed: {e}"
 
-def start_gradio():
-    demo = gr.Interface(
-        fn=gr_submit,
-        inputs=gr.Textbox(lines=4, placeholder="Ask StudyBuddy..."),
-        outputs="text",
-        title="StudyBuddy — lightweight AI assistant",
-        description="Summaries, answers, quizzes. Uses a configurable HF model. Cache + rate-limit enabled to protect free quota.",
-        allow_flagging="never"
-    )
-    demo.launch(server_name="0.0.0.0", server_port=PORT, share=False)
+demo = gr.Interface(
+    fn=gradio_interface,
+    inputs=gr.Textbox(label="Ask anything", lines=4),
+    outputs="text",
+    title="🧠 StudyBuddy — Free Hugging Face AI",
+    description="Chat with a free open-source model hosted by Hugging Face.",
+)
 
-# start gradio in background (for local dev). For Render/production you may run only FastAPI and not start Gradio.
+@app.get("/ui", response_class=HTMLResponse)
+def ui():
+    return demo.launch(share=False, inline=True, inbrowser=False, prevent_thread_lock=True)
+
+# === Run FastAPI (only) ===
 if __name__ == "__main__":
-    # start Gradio thread for local dev convenience
-    t = threading.Thread(target=start_gradio, daemon=True)
-    t.start()
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    port = int(os.getenv("PORT", "8000"))
+    uvicorn.run(app, host="0.0.0.0", port=port)
+
