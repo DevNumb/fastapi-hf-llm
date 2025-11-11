@@ -4,11 +4,8 @@ import gradio as gr
 import requests
 import os
 import threading
-from dotenv import load_dotenv
-
-# --- Load environment variables ---
-load_dotenv()
-HF_TOKEN = os.getenv("HF_TOKEN")
+import os
+HF_TOKEN = os.environ.get("HF_TOKEN")
 
 # --- Hugging Face API config ---
 API_URL = "https://router.huggingface.co/v1/chat/completions"
@@ -83,4 +80,5 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
 
