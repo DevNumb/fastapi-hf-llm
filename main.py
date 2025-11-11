@@ -5,7 +5,7 @@ import requests
 import json
 
 # Get Hugging Face token from environment variables
-hf_token = os.environ.get('HF_TOKEN')
+hf_token = os.environ.get("HF_TOKEN")
 
 if not hf_token:
     raise ValueError("HF_TOKEN environment variable not set. Please set it in Render dashboard.")
@@ -113,5 +113,6 @@ if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
 
 
