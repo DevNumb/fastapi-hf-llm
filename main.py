@@ -1,152 +1,117 @@
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-import requests
 import os
-import time
-import uuid
-from typing import Optional
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import requests
 import json
 
-# === Environment setup ===
-HF_TOKEN = os.environ.get("HF_TOKEN")
-MODEL_NAME = os.environ.get("MODEL_NAME", "mistralai/Mistral-7B-Instruct-v0.1")
-API_URL = "https://router.huggingface.co/v1/chat/completions"
+# Get Hugging Face token from environment variables
+hf_token = os.environ.get('HF_TOKEN')
 
+if not hf_token:
+    raise ValueError("HF_TOKEN environment variable not set. Please set it in Render dashboard.")
 
-
-HEADERS = {
-    "Authorization": f"Bearer {HF_TOKEN}",
-    "Content-Type": "application/json",
+API_URL = "https://api-inference.huggingface.co/models/microsoft/DialoGPT-large"
+headers = {
+    "Authorization": f"Bearer {hf_token}",
+    "Content-Type": "application/json"
 }
 
-# === Simple cache ===
-class TTLCache:
-    def __init__(self, ttl_seconds=600):
-        self.ttl = ttl_seconds
-        self.store = {}
+app = FastAPI(title="Chat API", version="1.0.0")
 
-    def get(self, key):
-        v = self.store.get(key)
-        if not v:
-            return None
-        ts, val = v
-        if time.time() - ts > self.ttl:
-            del self.store[key]
-            return None
-        return val
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    def set(self, key, val):
-        self.store[key] = (time.time(), val)
+# Store conversations (in production, use a proper database)
+conversations = {}
 
-cache = TTLCache()
-
-# === Rate limiter ===
-class RateLimiter:
-    def __init__(self, max_requests=20, window_seconds=60):
-        self.max_requests = max_requests
-        self.window = window_seconds
-        self.clients = {}
-
-    def allow(self, ip):
-        now = time.time()
-        timestamps = [t for t in self.clients.get(ip, []) if now - t < self.window]
-        if len(timestamps) >= self.max_requests:
-            self.clients[ip] = timestamps
-            return False
-        timestamps.append(now)
-        self.clients[ip] = timestamps
-        return True
-
-rate_limiter = RateLimiter()
-
-# === Hugging Face query ===
-def query_hf(prompt: str, model: Optional[str] = None):
-    model = model or MODEL_NAME
-    payload = {"model": model, "messages": [{"role": "user", "content": prompt}]}
-    r = requests.post(API_URL, headers=HEADERS, json=payload, timeout=30)
-    if r.status_code != 200:
-        raise Exception(f"HF error {r.status_code}: {r.text}")
-    data = r.json()
-    return data["choices"][0]["message"]["content"]
-
-# === FastAPI App ===
-app = FastAPI(title="StudyBuddy AI", description="Free AI Assistant powered by Hugging Face")
-
-# Create templates directory if it doesn't exist
-os.makedirs("static", exist_ok=True)
-os.makedirs("templates", exist_ok=True)
-
-# Mount static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
-
-# Store chat sessions (in production, use Redis or database)
-chat_sessions = {}
-
-# === Routes ===
-@app.get("/")
-async def home(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
-
-@app.get("/api/health")
-def health():
-    return {"status": "healthy", "model": MODEL_NAME}
-
-@app.post("/api/generate")
-async def generate(request: Request):
-    body = await request.json()
-    prompt = body.get("prompt")
-    session_id = body.get("session_id", str(uuid.uuid4()))
-    
-    if not prompt:
-        raise HTTPException(status_code=400, detail="Missing 'prompt'.")
-
-    ip = request.client.host
-    if not rate_limiter.allow(ip):
-        raise HTTPException(status_code=429, detail="Rate limit exceeded.")
-
-    cache_key = f"{MODEL_NAME}::{prompt.strip()}"
-    cached = cache.get(cache_key)
-    
-    if cached:
-        return {
-            "cached": True, 
-            "response": cached,
-            "session_id": session_id
-        }
-
+def query_huggingface(payload):
+    """Query Hugging Face API"""
     try:
-        response = query_hf(prompt)
+        response = requests.post(API_URL, headers=headers, json=payload)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=500, detail=f"Hugging Face API error: {str(e)}")
+
+@app.get("/")
+async def root():
+    return {"message": "Chat API is running", "status": "healthy"}
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy"}
+
+@app.post("/chat/{conversation_id}")
+async def chat(conversation_id: str, message: str):
+    """Send a message and get a response"""
+    if conversation_id not in conversations:
+        conversations[conversation_id] = []
+    
+    # Add user message to conversation history
+    conversations[conversation_id].append(f"User: {message}")
+    
+    # Prepare payload for DialoGPT
+    payload = {
+        "inputs": {
+            "text": message,
+            "past_user_inputs": [],
+            "generated_responses": []
+        }
+    }
+    
+    try:
+        # Get response from Hugging Face
+        response = query_huggingface(payload)
+        
+        # Extract the generated text
+        if isinstance(response, list) and len(response) > 0:
+            bot_response = response[0].get('generated_text', 'Sorry, I did not understand that.')
+        else:
+            bot_response = response.get('generated_text', 'Sorry, I did not understand that.')
+        
+        # Add bot response to conversation history
+        conversations[conversation_id].append(f"Bot: {bot_response}")
+        
+        return {
+            "conversation_id": conversation_id,
+            "user_message": message,
+            "bot_response": bot_response,
+            "conversation_history": conversations[conversation_id][-6:]  # Last 3 exchanges
+        }
+    
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-    cache.set(cache_key, response)
-    
-    # Store in session
-    if session_id not in chat_sessions:
-        chat_sessions[session_id] = []
-    
-    chat_sessions[session_id].append({
-        "prompt": prompt,
-        "response": response,
-        "timestamp": time.time()
-    })
+@app.get("/conversation/{conversation_id}")
+async def get_conversation(conversation_id: str):
+    """Get conversation history"""
+    if conversation_id not in conversations:
+        return {"conversation_id": conversation_id, "history": []}
     
     return {
-        "cached": False, 
-        "response": response,
-        "session_id": session_id
+        "conversation_id": conversation_id,
+        "history": conversations[conversation_id]
     }
 
-@app.get("/api/history/{session_id}")
-async def get_history(session_id: str):
-    return chat_sessions.get(session_id, [])
+@app.delete("/conversation/{conversation_id}")
+async def delete_conversation(conversation_id: str):
+    """Delete a conversation"""
+    if conversation_id in conversations:
+        del conversations[conversation_id]
+        return {"message": f"Conversation {conversation_id} deleted"}
+    else:
+        raise HTTPException(status_code=404, detail="Conversation not found")
 
-# === Run FastAPI ===
+# Required for Render deployment
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.getenv("PORT", "8000"))
+    port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
 
