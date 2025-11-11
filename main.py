@@ -1,10 +1,13 @@
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 import requests
-import gradio as gr
 import os
 import time
+import uuid
 from typing import Optional
+import json
 
 # === Environment setup ===
 HF_TOKEN = os.environ.get("HF_TOKEN")
@@ -69,17 +72,35 @@ def query_hf(prompt: str, model: Optional[str] = None):
     data = r.json()
     return data["choices"][0]["message"]["content"]
 
-# === FastAPI ===
-app = FastAPI()
+# === FastAPI App ===
+app = FastAPI(title="StudyBuddy AI", description="Free AI Assistant powered by Hugging Face")
 
+# Create templates directory if it doesn't exist
+os.makedirs("static", exist_ok=True)
+os.makedirs("templates", exist_ok=True)
+
+# Mount static files
+app.mount("/static", StaticFiles(directory="static"), name="static")
+templates = Jinja2Templates(directory="templates")
+
+# Store chat sessions (in production, use Redis or database)
+chat_sessions = {}
+
+# === Routes ===
 @app.get("/")
-def home():
-    return {"status": "ok", "note": "Go to /ui for the AI chat interface."}
+async def home(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
 
-@app.post("/generate")
+@app.get("/api/health")
+def health():
+    return {"status": "healthy", "model": MODEL_NAME}
+
+@app.post("/api/generate")
 async def generate(request: Request):
     body = await request.json()
     prompt = body.get("prompt")
+    session_id = body.get("session_id", str(uuid.uuid4()))
+    
     if not prompt:
         raise HTTPException(status_code=400, detail="Missing 'prompt'.")
 
@@ -89,8 +110,13 @@ async def generate(request: Request):
 
     cache_key = f"{MODEL_NAME}::{prompt.strip()}"
     cached = cache.get(cache_key)
+    
     if cached:
-        return {"cached": True, "response": cached}
+        return {
+            "cached": True, 
+            "response": cached,
+            "session_id": session_id
+        }
 
     try:
         response = query_hf(prompt)
@@ -98,34 +124,29 @@ async def generate(request: Request):
         raise HTTPException(status_code=500, detail=str(e))
 
     cache.set(cache_key, response)
-    return {"cached": False, "response": response}
+    
+    # Store in session
+    if session_id not in chat_sessions:
+        chat_sessions[session_id] = []
+    
+    chat_sessions[session_id].append({
+        "prompt": prompt,
+        "response": response,
+        "timestamp": time.time()
+    })
+    
+    return {
+        "cached": False, 
+        "response": response,
+        "session_id": session_id
+    }
 
-# === Gradio UI ===
-def gradio_interface(prompt):
-    try:
-        r = requests.post("http://127.0.0.1:8000/generate", json={"prompt": prompt})
-        if r.status_code == 200:
-            return r.json()["response"]
-        else:
-            return f"Error {r.status_code}: {r.text}"
-    except Exception as e:
-        return f"Request failed: {e}"
+@app.get("/api/history/{session_id}")
+async def get_history(session_id: str):
+    return chat_sessions.get(session_id, [])
 
-demo = gr.Interface(
-    fn=gradio_interface,
-    inputs=gr.Textbox(label="Ask anything", lines=4),
-    outputs="text",
-    title="🧠 StudyBuddy — Free Hugging Face AI",
-    description="Chat with a free open-source model hosted by Hugging Face.",
-)
-
-@app.get("/ui", response_class=HTMLResponse)
-def ui():
-    return demo.launch(share=False, inline=True, inbrowser=False, prevent_thread_lock=True)
-
-# === Run FastAPI (only) ===
+# === Run FastAPI ===
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", "8000"))
     uvicorn.run(app, host="0.0.0.0", port=port)
-
