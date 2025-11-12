@@ -1,26 +1,26 @@
 import os
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
 import requests
 import uvicorn
+import gradio as gr
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 # === CONFIG ===
-HF_TOKEN = os.environ.get("HF_TOKEN")
+HF_TOKEN = os.getenv("HF_TOKEN")
 MODEL_NAME = "mistralai/Mistral-7B-Instruct-v0.1"
 API_URL = "https://router.huggingface.co/v1/chat/completions"
 
 if not HF_TOKEN:
-    raise ValueError("❌ HF_TOKEN not found. Please set it in Render → Environment → Secret Keys")
+    raise ValueError("❌ HF_TOKEN not set. Please add it in Render → Environment Variables.")
 
 HEADERS = {
     "Authorization": f"Bearer {HF_TOKEN}",
     "Content-Type": "application/json",
 }
 
-# === FastAPI Setup ===
-app = FastAPI(title="Mistral Chat API", version="1.0.0")
+# === FASTAPI APP ===
+app = FastAPI(title="Mistral ChatGPT Clone", version="1.0.0")
 
-# Enable CORS for any frontend (Gradio, React, etc.)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,90 +29,78 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory conversation storage
+# === Conversation Store ===
 conversations = {}
 
-# === Helper to query Hugging Face ===
-def query_huggingface(messages):
-    payload = {
-        "model": MODEL_NAME,
-        "messages": messages
-    }
-
+# === Hugging Face Query ===
+def query_hf(messages):
+    payload = {"model": MODEL_NAME, "messages": messages}
     response = requests.post(API_URL, headers=HEADERS, json=payload, timeout=40)
     if response.status_code != 200:
         raise HTTPException(status_code=response.status_code, detail=response.text)
-
     data = response.json()
     try:
         return data["choices"][0]["message"]["content"]
     except Exception:
-        raise HTTPException(status_code=500, detail=f"Unexpected response: {data}")
+        raise HTTPException(status_code=500, detail=f"Unexpected HF response: {data}")
 
-# === ROUTES ===
-@app.get("/")
-async def root():
-    return {"message": "✅ Mistral Chat API running!", "usage": "POST /chat/{conversation_id}?message=Hello"}
+# === Gradio Chat Function ===
+def chat_with_ai(message, history):
+    conversation_id = "default"
+    if conversation_id not in conversations:
+        conversations[conversation_id] = [{"role": "system", "content": "You are a helpful AI assistant."}]
+    
+    # Add user message
+    conversations[conversation_id].append({"role": "user", "content": message})
 
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy"}
-
-@app.post("/chat/{conversation_id}")
-async def chat(conversation_id: str, request: Request):
-    """
-    Send a user message to the model and return the AI's response.
-    """
+    # Query model
     try:
-        body = await request.json()
-        message = body.get("message")
-        if not message:
-            raise HTTPException(status_code=400, detail="Missing 'message' field.")
-
-        # Initialize conversation if new
-        if conversation_id not in conversations:
-            conversations[conversation_id] = [{"role": "system", "content": "You are a helpful assistant."}]
-
-        # Add user message
-        conversations[conversation_id].append({"role": "user", "content": message})
-
-        # Get AI reply
-        ai_response = query_huggingface(conversations[conversation_id])
-
-        # Add AI message to conversation
-        conversations[conversation_id].append({"role": "assistant", "content": ai_response})
-
-        # Limit conversation history (avoid memory bloat)
-        conversations[conversation_id] = conversations[conversation_id][-10:]
-
-        return {
-            "conversation_id": conversation_id,
-            "user_message": message,
-            "bot_response": ai_response,
-            "conversation_history": conversations[conversation_id],
-        }
-
+        ai_reply = query_hf(conversations[conversation_id])
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        return [(message, f"⚠️ Error: {e}")]
 
-@app.get("/conversation/{conversation_id}")
-async def get_conversation(conversation_id: str):
-    """Retrieve chat history"""
+    # Add assistant message
+    conversations[conversation_id].append({"role": "assistant", "content": ai_reply})
+    conversations[conversation_id] = conversations[conversation_id][-12:]
+
+    # Format for Gradio chat history
+    history.append((message, ai_reply))
+    return history
+
+# === Gradio UI ===
+chat_ui = gr.ChatInterface(
+    fn=chat_with_ai,
+    title="💬 Mistral ChatGPT Clone",
+    description="A fast, open-source ChatGPT-style AI assistant powered by Hugging Face’s Mistral 7B.",
+    theme="soft",  # Elegant built-in Gradio theme
+    examples=["Explain quantum computing in simple terms.", "Write a short poem about AI."],
+    retry_btn="🔁 Regenerate",
+    undo_btn="↩ Undo last message",
+)
+
+# === FastAPI Routes ===
+@app.get("/")
+def home():
     return {
-        "conversation_id": conversation_id,
-        "history": conversations.get(conversation_id, [])
+        "message": "✅ Mistral ChatGPT Clone running!",
+        "ui": "/ui",
+        "api": "/chat",
+        "model": MODEL_NAME,
     }
 
-@app.delete("/conversation/{conversation_id}")
-async def delete_conversation(conversation_id: str):
-    """Clear chat history"""
-    if conversation_id in conversations:
-        del conversations[conversation_id]
-        return {"message": f"Conversation {conversation_id} deleted."}
-    raise HTTPException(status_code=404, detail="Conversation not found.")
+@app.get("/health")
+def health():
+    return {"status": "healthy"}
+
+@app.get("/ui")
+def launch_ui():
+    # Launch Gradio in inline mode for Render
+    return chat_ui.launch(share=False, inline=True, inbrowser=False, prevent_thread_lock=True)
 
 # === Render Entrypoint ===
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
+    port = int(os.getenv("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
+
+
 
