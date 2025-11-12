@@ -97,10 +97,11 @@ def launch_ui():
     # Launch Gradio in inline mode for Render
     return chat_ui.launch(share=False, inline=True, inbrowser=False, prevent_thread_lock=True)
 
-# === Render Entrypoint ===
+# Required by Render: listen on PORT
 if __name__ == "__main__":
-    port = int(os.getenv("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT", 7860))
+    demo.launch(server_name="0.0.0.0", server_port=port)
+
 
 
 
