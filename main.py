@@ -2,40 +2,43 @@ import os
 import gradio as gr
 import requests
 
-# Get Hugging Face API key from Render environment variables
 HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
+if not HF_TOKEN:
+    raise ValueError("HF_TOKEN environment variable not set on Render.")
+
 API_URL = "https://router.huggingface.co/v1/chat/completions"
-headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+HEADERS = {"Authorization": f"Bearer {HF_TOKEN}"}
 
 
 def chat_with_ai(message, history):
-    """Simple AI chat using Hugging Face Inference API"""
+    """Chat function for Hugging Face model"""
     payload = {
-        "model": "meta-llama/Llama-3.1-8B-Instruct",
+        "model": "mistralai/Mistral-7B-Instruct-v0.1",  # Free-tier model
         "messages": [
-            {"role": "system", "content": "You are a professional AI assistant."},
+            {"role": "system", "content": "You are a helpful AI assistant."},
             {"role": "user", "content": message},
         ],
     }
 
-    response = requests.post(API_URL, headers=headers, json=payload, timeout=60)
-    data = response.json()
-    return data.get("choices", [{}])[0].get("message", {}).get("content", "⚠️ Error: No reply")
+    try:
+        response = requests.post(API_URL, headers=HEADERS, json=payload, timeout=60)
+        response.raise_for_status()
+        data = response.json()
+        return data.get("choices", [{}])[0].get("message", {}).get("content", "⚠️ No response.")
+    except Exception as e:
+        return f"❌ Error: {e}"
 
 
-# Gradio chat interface
 app = gr.ChatInterface(
     fn=chat_with_ai,
-    title="💬 Professional AI Chat",
-    description="A clean ChatGPT-like interface using Hugging Face open models.",
+    title="💬 Professional AI Chatbot",
+    description="Chat with a free Hugging Face model hosted on Render.",
     theme="soft",
 )
 
-# Render automatically sets PORT, so we use it
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 7860))
+    port = int(os.environ.get("PORT", 7860))  # <- required for Render
     app.launch(server_name="0.0.0.0", server_port=port)
-
 
 
 
