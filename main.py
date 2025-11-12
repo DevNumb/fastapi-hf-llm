@@ -1,24 +1,26 @@
 import os
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 import requests
-import json
+import uvicorn
 
-# Get Hugging Face token from environment variables
-hf_token = os.environ.get("HF_TOKEN")
+# === CONFIG ===
+HF_TOKEN = os.environ.get("HF_TOKEN")
+MODEL_NAME = "mistralai/Mistral-7B-Instruct-v0.1"
+API_URL = "https://router.huggingface.co/v1/chat/completions"
 
-if not hf_token:
-    raise ValueError("HF_TOKEN environment variable not set. Please set it in Render dashboard.")
+if not HF_TOKEN:
+    raise ValueError("❌ HF_TOKEN not found. Please set it in Render → Environment → Secret Keys")
 
-API_URL = "https://api-inference.huggingface.co/models/microsoft/DialoGPT-large"
-headers = {
-    "Authorization": f"Bearer {hf_token}",
-    "Content-Type": "application/json"
+HEADERS = {
+    "Authorization": f"Bearer {HF_TOKEN}",
+    "Content-Type": "application/json",
 }
 
-app = FastAPI(title="Chat API", version="1.0.0")
+# === FastAPI Setup ===
+app = FastAPI(title="Mistral Chat API", version="1.0.0")
 
-# Add CORS middleware
+# Enable CORS for any frontend (Gradio, React, etc.)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -27,92 +29,90 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Store conversations (in production, use a proper database)
+# In-memory conversation storage
 conversations = {}
 
-def query_huggingface(payload):
-    """Query Hugging Face API"""
-    try:
-        response = requests.post(API_URL, headers=headers, json=payload)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=500, detail=f"Hugging Face API error: {str(e)}")
+# === Helper to query Hugging Face ===
+def query_huggingface(messages):
+    payload = {
+        "model": MODEL_NAME,
+        "messages": messages
+    }
 
+    response = requests.post(API_URL, headers=HEADERS, json=payload, timeout=40)
+    if response.status_code != 200:
+        raise HTTPException(status_code=response.status_code, detail=response.text)
+
+    data = response.json()
+    try:
+        return data["choices"][0]["message"]["content"]
+    except Exception:
+        raise HTTPException(status_code=500, detail=f"Unexpected response: {data}")
+
+# === ROUTES ===
 @app.get("/")
 async def root():
-    return {"message": "Chat API is running", "status": "healthy"}
+    return {"message": "✅ Mistral Chat API running!", "usage": "POST /chat/{conversation_id}?message=Hello"}
 
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
 
 @app.post("/chat/{conversation_id}")
-async def chat(conversation_id: str, message: str):
-    """Send a message and get a response"""
-    if conversation_id not in conversations:
-        conversations[conversation_id] = []
-    
-    # Add user message to conversation history
-    conversations[conversation_id].append(f"User: {message}")
-    
-    # Prepare payload for DialoGPT
-    payload = {
-        "inputs": {
-            "text": message,
-            "past_user_inputs": [],
-            "generated_responses": []
-        }
-    }
-    
+async def chat(conversation_id: str, request: Request):
+    """
+    Send a user message to the model and return the AI's response.
+    """
     try:
-        # Get response from Hugging Face
-        response = query_huggingface(payload)
-        
-        # Extract the generated text
-        if isinstance(response, list) and len(response) > 0:
-            bot_response = response[0].get('generated_text', 'Sorry, I did not understand that.')
-        else:
-            bot_response = response.get('generated_text', 'Sorry, I did not understand that.')
-        
-        # Add bot response to conversation history
-        conversations[conversation_id].append(f"Bot: {bot_response}")
-        
+        body = await request.json()
+        message = body.get("message")
+        if not message:
+            raise HTTPException(status_code=400, detail="Missing 'message' field.")
+
+        # Initialize conversation if new
+        if conversation_id not in conversations:
+            conversations[conversation_id] = [{"role": "system", "content": "You are a helpful assistant."}]
+
+        # Add user message
+        conversations[conversation_id].append({"role": "user", "content": message})
+
+        # Get AI reply
+        ai_response = query_huggingface(conversations[conversation_id])
+
+        # Add AI message to conversation
+        conversations[conversation_id].append({"role": "assistant", "content": ai_response})
+
+        # Limit conversation history (avoid memory bloat)
+        conversations[conversation_id] = conversations[conversation_id][-10:]
+
         return {
             "conversation_id": conversation_id,
             "user_message": message,
-            "bot_response": bot_response,
-            "conversation_history": conversations[conversation_id][-6:]  # Last 3 exchanges
+            "bot_response": ai_response,
+            "conversation_history": conversations[conversation_id],
         }
-    
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/conversation/{conversation_id}")
 async def get_conversation(conversation_id: str):
-    """Get conversation history"""
-    if conversation_id not in conversations:
-        return {"conversation_id": conversation_id, "history": []}
-    
+    """Retrieve chat history"""
     return {
         "conversation_id": conversation_id,
-        "history": conversations[conversation_id]
+        "history": conversations.get(conversation_id, [])
     }
 
 @app.delete("/conversation/{conversation_id}")
 async def delete_conversation(conversation_id: str):
-    """Delete a conversation"""
+    """Clear chat history"""
     if conversation_id in conversations:
         del conversations[conversation_id]
-        return {"message": f"Conversation {conversation_id} deleted"}
-    else:
-        raise HTTPException(status_code=404, detail="Conversation not found")
+        return {"message": f"Conversation {conversation_id} deleted."}
+    raise HTTPException(status_code=404, detail="Conversation not found.")
 
-# Required for Render deployment
+# === Render Entrypoint ===
 if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 10000))
+    port = int(os.environ.get("PORT", 8000))
     uvicorn.run(app, host="0.0.0.0", port=port)
-
-
 
