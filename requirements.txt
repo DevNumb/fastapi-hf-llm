@@ -1,7 +1,6 @@
-gradio==4.44.0
+gradio==4.37.2
 requests
-
-
+pyaudioop
 
 
 
